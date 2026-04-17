@@ -3,7 +3,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from bot.handlers import collect_message, summary_command
+from bot.handlers import collect_message, summary_command, voice_handler
 from bot.storage import MessageStorage
 
 
@@ -106,3 +106,111 @@ async def test_summary_command_preserves_buffer_on_error():
         "Sorry, couldn't generate a summary right now. Try again later."
     )
     assert not storage.is_empty(1)
+
+
+def _make_voice_update(chat_id, file_id="file123", first_name="Alice", date=None):
+    """Build a minimal mock Telegram Update for a voice message."""
+    update = MagicMock()
+    update.effective_chat.id = chat_id
+    update.effective_chat.type = "group"
+    update.message.voice.file_id = file_id
+    update.message.from_user.first_name = first_name
+    update.message.from_user.last_name = None
+    update.message.date = date or datetime(2026, 4, 17, 10, 0, tzinfo=timezone.utc)
+    update.message.reply_text = AsyncMock()
+    return update
+
+
+@pytest.mark.asyncio
+async def test_voice_handler_transcribes_and_stores():
+    storage = MessageStorage()
+    update = _make_voice_update(1)
+    context = MagicMock()
+    mock_file = AsyncMock()
+    mock_file.download_as_bytearray.return_value = bytearray(b"fake-audio")
+    context.bot.get_file = AsyncMock(return_value=mock_file)
+
+    with patch("bot.handlers.transcribe", new_callable=AsyncMock) as mock_transcribe:
+        mock_transcribe.return_value = "Hello from voice"
+
+        await voice_handler(update, context, storage=storage)
+
+    mock_transcribe.assert_called_once_with(bytes(bytearray(b"fake-audio")))
+    messages = storage.get_and_clear(1)
+    assert len(messages) == 1
+    assert messages[0]["sender"] == "Alice"
+    assert messages[0]["text"] == "Hello from voice"
+    update.message.reply_text.assert_called_once_with("**Alice:** Hello from voice")
+
+
+@pytest.mark.asyncio
+async def test_voice_handler_uses_full_name_in_reply():
+    storage = MessageStorage()
+    update = _make_voice_update(1)
+    update.message.from_user.last_name = "Smith"
+    context = MagicMock()
+    mock_file = AsyncMock()
+    mock_file.download_as_bytearray.return_value = bytearray(b"fake-audio")
+    context.bot.get_file = AsyncMock(return_value=mock_file)
+
+    with patch("bot.handlers.transcribe", new_callable=AsyncMock) as mock_transcribe:
+        mock_transcribe.return_value = "Hey there"
+
+        await voice_handler(update, context, storage=storage)
+
+    update.message.reply_text.assert_called_once_with("**Alice Smith:** Hey there")
+    messages = storage.get_and_clear(1)
+    assert messages[0]["sender"] == "Alice Smith"
+
+
+@pytest.mark.asyncio
+async def test_voice_handler_ignores_private_chats():
+    storage = MessageStorage()
+    update = _make_voice_update(1)
+    update.effective_chat.type = "private"
+    context = MagicMock()
+
+    await voice_handler(update, context, storage=storage)
+
+    assert storage.is_empty(1)
+    update.message.reply_text.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_voice_handler_error_on_transcription_failure():
+    storage = MessageStorage()
+    update = _make_voice_update(1)
+    context = MagicMock()
+    mock_file = AsyncMock()
+    mock_file.download_as_bytearray.return_value = bytearray(b"fake-audio")
+    context.bot.get_file = AsyncMock(return_value=mock_file)
+
+    with patch("bot.handlers.transcribe", new_callable=AsyncMock) as mock_transcribe:
+        mock_transcribe.side_effect = Exception("Whisper error")
+
+        await voice_handler(update, context, storage=storage)
+
+    update.message.reply_text.assert_called_once_with(
+        "Sorry, couldn't transcribe this voice message."
+    )
+    assert storage.is_empty(1)
+
+
+@pytest.mark.asyncio
+async def test_voice_handler_empty_transcription():
+    storage = MessageStorage()
+    update = _make_voice_update(1)
+    context = MagicMock()
+    mock_file = AsyncMock()
+    mock_file.download_as_bytearray.return_value = bytearray(b"fake-audio")
+    context.bot.get_file = AsyncMock(return_value=mock_file)
+
+    with patch("bot.handlers.transcribe", new_callable=AsyncMock) as mock_transcribe:
+        mock_transcribe.return_value = ""
+
+        await voice_handler(update, context, storage=storage)
+
+    update.message.reply_text.assert_called_once_with(
+        "Couldn't recognize any speech in this voice message."
+    )
+    assert storage.is_empty(1)
