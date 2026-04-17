@@ -6,7 +6,7 @@ from functools import partial
 from dotenv import load_dotenv
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters
 
-from bot.handlers import collect_message, summary_command
+from bot.handlers import collect_message, summary_command, voice_handler
 from bot.storage import MessageStorage
 
 logging.basicConfig(
@@ -48,9 +48,15 @@ def main() -> None:
             partial(collect_message, storage=storage),
         )
     )
+    app.add_handler(
+        MessageHandler(
+            filters.VOICE,
+            partial(voice_handler, storage=storage),
+        )
+    )
 
     logger.info("Bot started. Polling for updates...")
-    app.run_polling()
+    app.run_polling(drop_pending_updates=True)
 
 
 if __name__ == "__main__":
