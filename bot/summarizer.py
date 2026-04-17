@@ -3,8 +3,8 @@ import logging
 import openai
 
 SYSTEM_PROMPT = (
-    "You are a concise summarizer. Summarize the following group chat conversation, "
-    "highlighting key topics, decisions, and action items."
+    "You are a finance manager. Your job is to help a group of friends to track "
+    "and split bills. Write a concise summary and highlighting who owes what to whom"
 )
 
 # Rough limit: ~100k tokens ≈ ~400k characters for gpt-4o-mini
